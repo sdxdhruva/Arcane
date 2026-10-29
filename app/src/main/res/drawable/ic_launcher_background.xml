@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 108x108dp canvas, full bleed. A violet-tinted pool of light behind the tile instead of a flat black
+     field: at icon scale the gradient is what separates a designed icon from a coloured square, and the
+     centre stays dark enough that the tile still reads as the subject. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path android:pathData="M0,0 H108 V108 H0 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="54"
+                android:centerY="52"
+                android:gradientRadius="66"
+                android:startColor="#241E45"
+                android:centerColor="#131327"
+                android:endColor="#06080D" />
+        </aapt:attr>
+    </path>
+</vector>

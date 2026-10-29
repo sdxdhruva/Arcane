@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  "Download into the vault" takes a URL a person types, and some of those URLs are plain http. Cleartext is
+  permitted because refusing it at the platform would silently break the feature; the sheet states out loud
+  that an http link travels unprotected, which is the honest place for that warning.
+
+  Trust anchors are the system store only. User- or app-added certificate authorities are deliberately not
+  trusted, so a proxy presenting a locally installed root cannot sit in the middle of a vault download.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

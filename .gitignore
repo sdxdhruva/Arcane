@@ -1,0 +1,35 @@
+# Gradle / Android build output
+.gradle/
+build/
+**/build/
+local.properties
+
+# Output packages
+*.apk
+*.aab
+
+# C/C++ native build artifacts
+.cxx/
+.externalNativeBuild/
+
+# Signing material — the APK signing key is never the vault key, but it stays out of the tree anyway
+*.keystore
+*.jks
+keystore.properties
+arcane.release.*
+
+# IDE & Editor files
+.idea/
+*.iml
+*.iws
+*.ipr
+.kotlin/
+.vscode/
+
+# OS generated
+.DS_Store
+Thumbs.db
+
+# Scratch & Logs
+*.log
+captures/

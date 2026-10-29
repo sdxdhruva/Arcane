@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Simple-mode browsing only. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
+
+    <!-- The one exception to "no socket crosses the vault", and it is pull-only: "download into the vault"
+         streams a URL straight through the chunk writer, so the bytes are encrypted before they land and a
+         plaintext copy never exists on disk. The in-vault web page browser uses the same path: its WebView
+         keeps no cache, cookies or DOM storage, and whatever it downloads is re-encrypted into the vault.
+         Nothing else in the app opens a connection, and there is no sync, telemetry or update check. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- The pre-33 spelling of the four above. It stops at 32 so a modern device is never asked for it. -->
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
+    <!-- The vault key is derived from the app's passphrase and nothing else: no fingerprint, no device PIN
+         and no Keystore wrap, so no authentication permission is declared here. -->
+
+
+    <!-- The ringer, borrowed for the length of an open folder. Declaring it is not the same as having it:
+         Android only moves the ringer for an app the owner has switched on under Do Not Disturb access, so
+         without that grant the app plays audio normally and says nothing. Nothing here reads or posts
+         notifications. -->
+    <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
+
+    <!-- Package visibility, not an intent filter: "open with…" on a phone file asks the package manager
+         which viewers exist, and Android 11+ answers "none" for an app that has not declared what it looks
+         for. This only makes installed viewers visible to that lookup; it adds no capability. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="*/*" />
+        </intent>
+    </queries>
+
+    <application
+        android:name=".ArcaneApplication"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:hasFragileUserData="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Arcane"
+        android:networkSecurityConfig="@xml/network_security_config"
+        tools:ignore="UnusedAttribute">
+
+        <activity
+            android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode|density"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.Arcane"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

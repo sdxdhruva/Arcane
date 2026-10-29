@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Themed icon layer: iconic cyber shield with aperture A monogram. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Shield contour -->
+    <path
+        android:pathData="M54,22 L78,32 L78,56 C78,72 54,86 54,86 C54,86 30,72 30,56 L30,32 Z"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3.5"
+        android:strokeLineJoin="round" />
+    <!-- Chevron / A glyph -->
+    <path
+        android:pathData="M42,68 L54,36 L66,68"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="4.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <!-- Aperture / keyhole circle -->
+    <path
+        android:pathData="M54,49 A4,4 0 1,0 54,57 A4,4 0 1,0 54,49 Z"
+        android:fillColor="#FFFFFF" />
+    <!-- Crossbar -->
+    <path
+        android:pathData="M45,60 L63,60"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3"
+        android:strokeLineCap="round" />
+</vector>
