@@ -195,8 +195,6 @@ fun VaultReelScreen(
             modifier = Modifier.align(Alignment.TopCenter),
         ) {
             ReelTopBar(
-                currentIndex = pagerState.currentPage,
-                totalCount = mediaItems.size,
                 onBack = onClose,
                 onShuffle = {
                     shuffleKey++
@@ -209,8 +207,6 @@ fun VaultReelScreen(
 
 @Composable
 private fun ReelTopBar(
-    currentIndex: Int,
-    totalCount: Int,
     onBack: () -> Unit,
     onShuffle: () -> Unit,
 ) {
@@ -227,8 +223,8 @@ private fun ReelTopBar(
                 ),
             )
             .padding(horizontal = 14.dp, vertical = ArcaneSpace.sm),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
     ) {
         ArcaneAction(
             icon = Icons.AutoMirrored.Rounded.ArrowBack,
@@ -237,25 +233,6 @@ private fun ReelTopBar(
             target = 44.dp,
             tint = Color.White,
         )
-
-        // Counter pill
-        Box(
-            modifier = Modifier
-                .clip(ArcanePill)
-                .background(ArcanePalette.Ink3.copy(alpha = 0.85f))
-                .border(1.dp, ArcanePalette.EdgeStrong, ArcanePill)
-                .padding(horizontal = 14.dp, vertical = 6.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = "${currentIndex + 1} / $totalCount",
-                style = MaterialTheme.typography.labelMedium.copy(
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.SemiBold,
-                ),
-                color = ArcanePalette.Cyan,
-            )
-        }
 
         ArcaneAction(
             icon = Icons.Rounded.Shuffle,
@@ -663,7 +640,7 @@ private fun ReelImagePage(
                             detectTapGestures(
                                 onTap = { onToggleChrome() },
                                 onDoubleTap = {
-                                    if (zoom > 1.2f) {
+                                    if (zoom > 1.05f) {
                                         zoom = 1f
                                         panX = 0f
                                         panY = 0f
@@ -674,16 +651,23 @@ private fun ReelImagePage(
                             )
                         }
                         .pointerInput(record) {
-                            detectTransformGestures(
-                                onGesture = { _, pan, gestureZoom, _ ->
-                                    zoom = (zoom * gestureZoom).coerceIn(1f, 4f)
-                                    if (zoom > 1f) {
-                                        panX += pan.x
-                                        panY += pan.y
+                            detectReelImageTransform(
+                                getZoom = { zoom },
+                                onTransform = { zoomChange, panChange ->
+                                    val nextZoom = (zoom * zoomChange).coerceIn(1f, 4f)
+                                    zoom = nextZoom
+                                    if (nextZoom > 1.05f) {
+                                        panX += panChange.x
+                                        panY += panChange.y
                                     } else {
                                         panX = 0f
                                         panY = 0f
                                     }
+                                },
+                                onReset = {
+                                    zoom = 1f
+                                    panX = 0f
+                                    panY = 0f
                                 },
                             )
                         },
@@ -691,7 +675,11 @@ private fun ReelImagePage(
             }
             result?.drawable != null -> {
                 AndroidView(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(record) {
+                            detectTapGestures(onTap = { onToggleChrome() })
+                        },
                     factory = { viewContext ->
                         ImageView(viewContext).apply {
                             scaleType = ImageView.ScaleType.FIT_CENTER
@@ -864,19 +852,35 @@ private fun Context.findWindow(): android.view.Window? =
         .firstOrNull()
         ?.window
 
-private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.detectTransformGestures(
-    onGesture: (centroid: androidx.compose.ui.geometry.Offset, pan: androidx.compose.ui.geometry.Offset, zoom: Float, rotation: Float) -> Unit,
+private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.detectReelImageTransform(
+    getZoom: () -> Float,
+    onTransform: (zoomChange: Float, panChange: androidx.compose.ui.geometry.Offset) -> Unit,
+    onReset: () -> Unit,
 ) {
     awaitEachGesture {
-        awaitFirstDown()
+        awaitFirstDown(requireUnconsumed = false)
         do {
             val event = awaitPointerEvent()
-            val zoom = event.calculateZoom()
-            val pan = event.calculatePan()
-            if (zoom != 1f || pan != androidx.compose.ui.geometry.Offset.Zero) {
-                onGesture(androidx.compose.ui.geometry.Offset.Zero, pan, zoom, 0f)
+            val downCount = event.changes.count { it.pressed }
+            val zoomChange = event.calculateZoom()
+            val panChange = event.calculatePan()
+            val currentZoom = getZoom()
+
+            if (downCount > 1) {
+                // Multi-touch: always handle pinch zoom and pan, consume touch
+                onTransform(zoomChange, panChange)
+                event.changes.forEach { it.consume() }
+            } else if (currentZoom > 1.05f) {
+                // Zoomed in: single finger pans around the zoomed image, consume touch
+                onTransform(1f, panChange)
                 event.changes.forEach { it.consume() }
             }
+            // When downCount <= 1 and currentZoom <= 1.05f:
+            // Do NOT consume! Let the vertical drag pass through to the VerticalPager!
         } while (event.changes.any { it.pressed })
+
+        if (getZoom() <= 1.05f) {
+            onReset()
+        }
     }
 }

@@ -37,8 +37,9 @@ class VaultThumbnails(
         override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
     }
 
-    /** Formats the platform refused once are not asked again on every scroll. */
+    /** Formats the platform refused multiple times are not asked again on every scroll. */
     private val unusable: MutableSet<String> = Collections.synchronizedSet(mutableSetOf<String>())
+    private val failureCounts: MutableMap<String, Int> = Collections.synchronizedMap(mutableMapOf<String, Int>())
 
     /** Bumped by [clear]; a decode that finishes afterwards must not repopulate the cache. */
     @Volatile
@@ -55,12 +56,17 @@ class VaultThumbnails(
         val startedIn = generation
         val bitmap = runCatching { extract(record) }.getOrNull()
         if (bitmap == null) {
-            unusable.add(key)
+            val count = (failureCounts[key] ?: 0) + 1
+            failureCounts[key] = count
+            if (count >= 2) {
+                unusable.add(key)
+            }
             return null
         }
         // The realm may have locked while the frame was being extracted; a bitmap from that generation is
         // plaintext that must not become reachable again.
         if (startedIn != generation) return null
+        failureCounts.remove(key)
         cache.put(key, bitmap)
         return bitmap
     }
@@ -69,6 +75,7 @@ class VaultThumbnails(
     fun clear() {
         generation++
         cache.evictAll()
+        failureCounts.clear()
         unusable.clear()
     }
 
@@ -123,6 +130,9 @@ class VaultThumbnails(
             }.getOrNull()
 
             unscaled?.let(::scaled)
+                ?: retriever.embeddedPicture?.let { bytes ->
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.let(::scaled)
+                }
         }
     }
 

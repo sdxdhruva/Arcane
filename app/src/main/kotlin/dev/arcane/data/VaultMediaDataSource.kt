@@ -15,9 +15,10 @@ import java.io.IOException
  * Since API 23 it also accepts a [MediaDataSource], which is this: a seekable view built on the same
  * decrypting [DataSource.Factory] playback already uses.
  *
- * Reads are serialised because the native side may call [readAt] from more than one thread, and one open
- * connection is kept per contiguous run so extracting a frame does not re-open (and re-derive the file key)
- * for every 64 KiB the parser asks for.
+ * Reads are serialised because the native side may call [readAt] from more than one thread. To support
+ * random non-sequential seeking required by metadata parsers (e.g. jumping between atom headers and indices),
+ * the data source opens at the requested position whenever a seek occurs, and streams sequentially
+ * when reads are contiguous.
  */
 @androidx.annotation.OptIn(UnstableApi::class)
 internal class VaultMediaDataSource(
@@ -28,23 +29,29 @@ internal class VaultMediaDataSource(
 
     private val lock = Any()
     private var source: DataSource? = null
-    private var windowStart = -1L
-    private var windowEnd = -1L
+    private var currentPos = -1L
 
     override fun readAt(position: Long, buffer: ByteArray, offset: Int, size: Int): Int = synchronized(lock) {
         if (size <= 0) return 0
         if (position < 0 || position >= length) return -1
         try {
-            if (source == null || position < windowStart || position >= windowEnd) openAt(position, size)
+            if (source == null || currentPos != position) {
+                openAt(position)
+            }
             val open = source ?: return -1
-            val want = minOf(size.toLong(), windowEnd - position, length - position).toInt()
+            val want = minOf(size.toLong(), length - position).toInt()
             var placed = 0
             while (placed < want) {
                 val read = open.read(buffer, offset + placed, want - placed)
                 if (read <= 0) break
                 placed += read
             }
-            if (placed == 0) -1 else placed
+            if (placed > 0) {
+                currentPos = position + placed
+                placed
+            } else {
+                -1
+            }
         } catch (failure: IOException) {
             closeQuietly()
             -1
@@ -57,31 +64,22 @@ internal class VaultMediaDataSource(
         synchronized(lock) { closeQuietly() }
     }
 
-    private fun openAt(position: Long, requested: Int) {
+    private fun openAt(position: Long) {
         closeQuietly()
-        val span = minOf(length - position, maxOf(requested.toLong(), READAHEAD_BYTES))
         val opened = factory.createDataSource()
         opened.open(
             DataSpec.Builder()
                 .setUri(uri)
                 .setPosition(position)
-                .setLength(span)
                 .build()
         )
         source = opened
-        windowStart = position
-        windowEnd = position + span
+        currentPos = position
     }
 
     private fun closeQuietly() {
         runCatching { source?.close() }
         source = null
-        windowStart = -1L
-        windowEnd = -1L
-    }
-
-    private companion object {
-        /** Four megabytes of readahead: handles 4K and high-bitrate media without stalling or over-decrypting. */
-        const val READAHEAD_BYTES = 4L shl 20
+        currentPos = -1L
     }
 }

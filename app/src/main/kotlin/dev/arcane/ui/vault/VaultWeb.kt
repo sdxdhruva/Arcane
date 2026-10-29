@@ -437,8 +437,9 @@ private fun buildWebView(
         override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
             val scheme = request.url.scheme?.lowercase()
             if (scheme != "http" && scheme != "https") return true
-            val path = request.url.path?.lowercase() ?: ""
-            if (DIRECT_DOWNLOAD_EXTS.any { path.endsWith(it) }) {
+            val path = (request.url.path ?: "").lowercase()
+            val cleanUrl = request.url.toString().lowercase().substringBefore('?').substringBefore('#')
+            if (DIRECT_DOWNLOAD_EXTS.any { path.endsWith(it) || cleanUrl.endsWith(it) }) {
                 graph.repository.download(request.url.toString(), folderId)
                 return true
             }
@@ -538,5 +539,16 @@ private fun normalise(raw: String): String? {
 }
 
 private val DIRECT_DOWNLOAD_EXTS = setOf(
-    ".apk", ".zip", ".rar", ".7z", ".tar", ".gz", ".tgz", ".bz2", ".xz", ".iso", ".dmg", ".bin"
+    // Video formats
+    ".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4v", ".3gp", ".3g2", ".flv", ".wmv",
+    ".ts", ".mts", ".m2ts", ".vob", ".ogv", ".mpg", ".mpeg", ".asf", ".f4v", ".rmvb", ".divx",
+    // Image formats
+    ".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".heic", ".heif", ".avif", ".svg",
+    ".ico", ".tiff", ".tif", ".raw", ".dng", ".cr2", ".nef", ".arw", ".psd",
+    // Audio formats
+    ".mp3", ".m4a", ".aac", ".flac", ".wav", ".ogg", ".opus", ".wma", ".alac", ".aiff",
+    // Documents & books
+    ".pdf", ".epub", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+    // Archives & install binaries
+    ".apk", ".xapk", ".apks", ".zip", ".rar", ".7z", ".tar", ".gz", ".tgz", ".bz2", ".xz", ".iso", ".dmg", ".bin", ".exe"
 )
