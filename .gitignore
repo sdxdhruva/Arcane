@@ -33,3 +33,6 @@ Thumbs.db
 # Scratch & Logs
 *.log
 captures/
+
+# Local project planning docs
+PLAN.md
