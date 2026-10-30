@@ -1,4 +1,13 @@
-# Arcane
+<div align="center">
+  <img src="app/src/main/res/mipmap-xxxhdpi/ic_launcher.png" alt="Arcane app icon" width="120" />
+  <h1>Arcane</h1>
+</div>
+
+<p align="center">
+  <a href="https://github.com/sdxdhruva/Arcane/releases/latest/download/Arcane.apk">
+    <img src="https://img.shields.io/badge/Download-Latest%20APK-4CAF50?style=for-the-badge&logo=android" alt="Download latest APK" />
+  </a>
+</p>
 
 Arcane is a privacy-focused Android app for keeping personal files and media in a passphrase-protected vault. It is designed around the idea that sensitive data should not be stored in obvious file names, visible folders, or plaintext caches on disk.
 
