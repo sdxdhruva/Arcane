@@ -47,6 +47,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.PlayCircle
@@ -96,6 +99,9 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import dev.arcane.data.AppGraph
 import dev.arcane.ui.components.ArcaneAction
+import dev.arcane.ui.components.ArcaneButton
+import dev.arcane.ui.components.ArcaneSheet
+import dev.arcane.ui.components.SheetAction
 import dev.arcane.ui.theme.ArcanePalette
 import dev.arcane.ui.theme.ArcanePill
 import dev.arcane.ui.theme.ArcaneSpace
@@ -127,28 +133,31 @@ fun VaultReelScreen(
 ) {
     var shuffleKey by remember { mutableIntStateOf(0) }
 
-    val mediaItems = remember(graph.holder.current?.realm?.index, shuffleKey) {
-        val files = graph.holder.current?.realm?.index?.files.orEmpty()
-        files.filter { record ->
-            val kind = kindOf(record)
-            kind == ViewerKind.VIDEO || kind == ViewerKind.IMAGE
-        }.shuffled(Random(System.currentTimeMillis() + shuffleKey * 7919L))
+    var localItems by remember(shuffleKey) {
+        mutableStateOf(
+            (graph.holder.current?.realm?.index?.files.orEmpty()).filter { record ->
+                val kind = kindOf(record)
+                kind == ViewerKind.VIDEO || kind == ViewerKind.IMAGE
+            }.shuffled(Random(System.currentTimeMillis() + shuffleKey * 7919L))
+        )
     }
 
     BackHandler(onBack = onClose)
 
-    if (mediaItems.isEmpty()) {
+    if (localItems.isEmpty()) {
         ReelEmptyState(onClose = onClose)
         return
     }
 
-    val pagerState = rememberPagerState(pageCount = { mediaItems.size })
+    val pagerState = rememberPagerState(pageCount = { localItems.size })
     val scope = rememberCoroutineScope()
     var chromeVisible by remember { mutableStateOf(true) }
+    var showMoreSheet by remember { mutableStateOf(false) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
 
-    // Auto-dim chrome after inactivity
-    LaunchedEffect(pagerState.currentPage, chromeVisible) {
-        if (!chromeVisible) return@LaunchedEffect
+    // Auto-dim chrome after inactivity (paused while sheets are open)
+    LaunchedEffect(pagerState.currentPage, chromeVisible, showMoreSheet, showDeleteConfirm) {
+        if (!chromeVisible || showMoreSheet || showDeleteConfirm) return@LaunchedEffect
         delay(3500L)
         chromeVisible = false
     }
@@ -162,9 +171,9 @@ fun VaultReelScreen(
             state = pagerState,
             modifier = Modifier.fillMaxSize(),
             beyondViewportPageCount = 0,
-            key = { index -> mediaItems.getOrNull(index)?.fileId?.contentHashCode() ?: index },
+            key = { index -> localItems.getOrNull(index)?.fileId?.contentHashCode() ?: index },
         ) { pageIndex ->
-            val record = mediaItems.getOrNull(pageIndex)
+            val record = localItems.getOrNull(pageIndex)
             if (record != null) {
                 val isActive = pagerState.currentPage == pageIndex
                 val isVideo = kindOf(record) == ViewerKind.VIDEO
@@ -200,7 +209,114 @@ fun VaultReelScreen(
                     shuffleKey++
                     scope.launch { pagerState.scrollToPage(0) }
                 },
+                onMore = { showMoreSheet = true },
             )
+        }
+
+        val currentRecord = localItems.getOrNull(pagerState.currentPage)
+
+        // 3-dot options sheet
+        ArcaneSheet(
+            visible = showMoreSheet && currentRecord != null,
+            onDismiss = { showMoreSheet = false },
+        ) {
+            currentRecord?.let { rec ->
+                val isVideo = kindOf(rec) == ViewerKind.VIDEO
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = ArcaneSpace.md)
+                        .padding(bottom = ArcaneSpace.xs),
+                ) {
+                    Text(
+                        text = rec.name,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = ArcanePalette.TextHigh,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = "${formatBytes(rec.plainSize)} · ${if (isVideo) "Video" else "Photo"}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ArcanePalette.TextMedium,
+                    )
+                }
+
+                SheetAction(
+                    label = "Delete ${if (isVideo) "video" else "photo"}",
+                    subtitle = "Permanently remove from encrypted vault",
+                    icon = Icons.Rounded.DeleteOutline,
+                    destructive = true,
+                    onClick = {
+                        showMoreSheet = false
+                        showDeleteConfirm = true
+                    },
+                )
+            }
+        }
+
+        // Delete confirmation sheet
+        ArcaneSheet(
+            visible = showDeleteConfirm && currentRecord != null,
+            onDismiss = { showDeleteConfirm = false },
+        ) {
+            currentRecord?.let { rec ->
+                val isVideo = kindOf(rec) == ViewerKind.VIDEO
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = ArcaneSpace.md)
+                        .padding(bottom = ArcaneSpace.md),
+                    verticalArrangement = Arrangement.spacedBy(ArcaneSpace.sm),
+                ) {
+                    Text(
+                        text = "Delete \"${rec.name}\"?",
+                        style = MaterialTheme.typography.titleLarge,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    Text(
+                        text = "This ${if (isVideo) "video" else "photo"} will be shredded and permanently deleted from the vault. This cannot be undone.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = ArcanePalette.TextMedium,
+                    )
+                    Row(
+                        modifier = Modifier.padding(top = ArcaneSpace.xs),
+                        horizontalArrangement = Arrangement.spacedBy(ArcaneSpace.xs),
+                    ) {
+                        ArcaneButton(
+                            label = "Cancel",
+                            filled = false,
+                            onClick = { showDeleteConfirm = false },
+                            modifier = Modifier.weight(1f),
+                        )
+                        ArcaneButton(
+                            label = "Delete",
+                            icon = Icons.Rounded.Delete,
+                            onClick = {
+                                showDeleteConfirm = false
+                                scope.launch {
+                                    try {
+                                        val updated = localItems.filterNot { it.fileId.contentEquals(rec.fileId) }
+                                        graph.repository.delete(listOf(rec.fileId))
+                                        graph.removeFilesFromQueue(listOf(rec.fileId))
+                                        if (updated.isEmpty()) {
+                                            onClose()
+                                        } else {
+                                            localItems = updated
+                                            val targetPage = pagerState.currentPage.coerceIn(0, updated.size - 1)
+                                            if (pagerState.currentPage != targetPage) {
+                                                pagerState.scrollToPage(targetPage)
+                                            }
+                                        }
+                                    } catch (_: Throwable) {
+                                    }
+                                }
+                            },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -209,6 +325,7 @@ fun VaultReelScreen(
 private fun ReelTopBar(
     onBack: () -> Unit,
     onShuffle: () -> Unit,
+    onMore: () -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -234,13 +351,26 @@ private fun ReelTopBar(
             tint = Color.White,
         )
 
-        ArcaneAction(
-            icon = Icons.Rounded.Shuffle,
-            hint = "Reshuffle Reel stream",
-            onClick = onShuffle,
-            target = 44.dp,
-            tint = ArcanePalette.Cyan,
-        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            ArcaneAction(
+                icon = Icons.Rounded.Shuffle,
+                hint = "Reshuffle Reel stream",
+                onClick = onShuffle,
+                target = 44.dp,
+                tint = ArcanePalette.Cyan,
+            )
+
+            ArcaneAction(
+                icon = Icons.Rounded.MoreVert,
+                hint = "Options",
+                onClick = onMore,
+                target = 44.dp,
+                tint = Color.White,
+            )
+        }
     }
 }
 
@@ -302,14 +432,28 @@ private fun ReelVideoPage(
             }
     }
 
-    DisposableEffect(player) {
-        onDispose { player.release() }
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(player, lifecycleOwner) {
+        graph.registerPlayer(player)
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_PAUSE || event == androidx.lifecycle.Lifecycle.Event.ON_STOP) {
+                if (player.isPlaying) player.pause()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            graph.unregisterPlayer(player)
+            player.release()
+        }
     }
 
     // Keep vault session unlocked while watching video
     LaunchedEffect(player) {
         while (true) {
-            graph.session.touch()
+            if (player.isPlaying && graph.session.isOpen) {
+                graph.session.touch()
+            }
             delay(15_000L)
         }
     }

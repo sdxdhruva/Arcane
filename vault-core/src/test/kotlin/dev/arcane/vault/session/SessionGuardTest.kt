@@ -97,6 +97,19 @@ class SessionGuardTest {
     }
 
     @Test
+    fun `touch while in background does not postpone background lock`() {
+        val session = guard(idle = 90_000, grace = 0L)
+        session.adopt()
+        session.leftForeground()
+        session.touch()
+        assertWithMessage("touch in background must not disarm background grace lock")
+            .that(scheduler.armed())
+            .containsExactly(0L)
+        scheduler.advance(0)
+        assertThat(scheduler.lockCount).isEqualTo(1)
+    }
+
+    @Test
     fun `a pick the app asked for survives the backgrounding, up to a ceiling`() {
         val session = guard(handoff = 120_000)
         session.adopt()
@@ -239,6 +252,22 @@ class SessionGuardTest {
         session.leftForeground()
         scheduler.advance(0)
 
+        assertThat(scheduler.lockCount).isEqualTo(1)
+    }
+
+    @Test
+    fun `pausing idle prevents auto lock until resumed`() {
+        val session = guard(idle = 30_000)
+        session.adopt()
+
+        session.pauseIdle(true)
+        scheduler.advance(60_000)
+        assertThat(scheduler.lockCount).isEqualTo(0)
+        assertThat(scheduler.armed()).isEmpty()
+
+        session.pauseIdle(false)
+        assertThat(scheduler.armed()).containsExactly(30_000L)
+        scheduler.advance(30_000)
         assertThat(scheduler.lockCount).isEqualTo(1)
     }
 

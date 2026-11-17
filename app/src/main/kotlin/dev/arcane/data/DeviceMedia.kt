@@ -9,6 +9,7 @@ import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
 import androidx.core.content.ContextCompat
+import java.net.URLDecoder
 import java.util.concurrent.Executors
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.asCoroutineDispatcher
@@ -33,10 +34,18 @@ data class DeviceItem(
     val size: Long,
     val modifiedAtMillis: Long,
     val durationMillis: Long,
+    val relativePath: String? = null,
 ) {
-    val isVideo: Boolean get() = mimeType?.startsWith("video") == true
-    val isImage: Boolean get() = mimeType?.startsWith("image") == true
-    val isAudio: Boolean get() = mimeType?.startsWith("audio") == true
+    val isVideo: Boolean get() = mimeType?.startsWith("video") == true || name.lowercase().let {
+        it.endsWith(".mp4") || it.endsWith(".mkv") || it.endsWith(".mov") || it.endsWith(".webm") || it.endsWith(".3gp")
+    }
+    val isImage: Boolean get() = mimeType?.startsWith("image") == true || name.lowercase().let {
+        it.endsWith(".jpg") || it.endsWith(".jpeg") || it.endsWith(".png") || it.endsWith(".webp") || it.endsWith(".gif") || it.endsWith(".bmp")
+    }
+    val isAudio: Boolean get() = mimeType?.startsWith("audio") == true || name.lowercase().let {
+        it.endsWith(".mp3") || it.endsWith(".wav") || it.endsWith(".flac") || it.endsWith(".m4a") || it.endsWith(".aac") || it.endsWith(".ogg")
+    }
+    val isDoc: Boolean get() = !isVideo && !isImage && !isAudio
 }
 
 enum class MediaKind { IMAGES, VIDEO, AUDIO }
@@ -79,6 +88,119 @@ class DeviceMedia(context: Context) {
                 .sortedWith(compareBy({ it.name.lowercase() }, { it.uri.toString() }))
         }
 
+    suspend fun allItems(kinds: Set<MediaKind> = MediaKind.entries.toSet()): List<DeviceItem> = withContext(io) {
+        val mediaItems = kinds.flatMap { query(it) }
+        val downloads = downloadItems()
+        val docs = documentItems()
+        (mediaItems + downloads + docs)
+            .distinctBy { it.uri }
+            .sortedByDescending { it.modifiedAtMillis }
+    }
+
+    suspend fun downloadItems(): List<DeviceItem> = withContext(io) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return@withContext emptyList()
+        val base = MediaStore.Downloads.EXTERNAL_CONTENT_URI
+        val projection = arrayOf(
+            MediaStore.MediaColumns._ID,
+            MediaStore.MediaColumns.DISPLAY_NAME,
+            MediaStore.MediaColumns.MIME_TYPE,
+            MediaStore.MediaColumns.SIZE,
+            MediaStore.MediaColumns.DATE_MODIFIED,
+            MediaStore.MediaColumns.RELATIVE_PATH,
+        )
+        val out = ArrayList<DeviceItem>()
+        runCatching {
+            app.contentResolver.query(
+                base,
+                projection,
+                null,
+                null,
+                "${MediaStore.MediaColumns.DATE_MODIFIED} DESC",
+            )?.use { cursor ->
+                val id = cursor.idx(MediaStore.MediaColumns._ID)
+                val name = cursor.idx(MediaStore.MediaColumns.DISPLAY_NAME)
+                val mime = cursor.idx(MediaStore.MediaColumns.MIME_TYPE)
+                val size = cursor.idx(MediaStore.MediaColumns.SIZE)
+                val modified = cursor.idx(MediaStore.MediaColumns.DATE_MODIFIED)
+                val rel = cursor.idx(MediaStore.MediaColumns.RELATIVE_PATH)
+                while (cursor.moveToNext()) {
+                    val rowId = cursor.longAt(id)
+                    val rawRel = cursor.stringAt(rel)?.trim()?.trim('/') ?: "Download"
+                    val rawName = cursor.stringAt(name) ?: "file"
+                    val cleanName = runCatching { URLDecoder.decode(rawName, "UTF-8") }.getOrDefault(rawName)
+                    out += DeviceItem(
+                        uri = ContentUris.withAppendedId(base, rowId),
+                        name = cleanName,
+                        bucketId = NO_BUCKET,
+                        bucketName = "Download",
+                        mimeType = cursor.stringAt(mime),
+                        size = cursor.longAt(size),
+                        modifiedAtMillis = cursor.longAt(modified) * 1000L,
+                        durationMillis = 0L,
+                        relativePath = rawRel,
+                    )
+                }
+            }
+        }
+        out
+    }
+
+    suspend fun documentItems(): List<DeviceItem> = withContext(io) {
+        val base = MediaStore.Files.getContentUri("external")
+        val projection = arrayOf(
+            MediaStore.MediaColumns._ID,
+            MediaStore.MediaColumns.DISPLAY_NAME,
+            MediaStore.MediaColumns.MIME_TYPE,
+            MediaStore.MediaColumns.SIZE,
+            MediaStore.MediaColumns.DATE_MODIFIED,
+            MediaStore.MediaColumns.BUCKET_ID,
+            MediaStore.MediaColumns.BUCKET_DISPLAY_NAME,
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) MediaStore.MediaColumns.RELATIVE_PATH else MediaStore.MediaColumns.DATA,
+        )
+        val selection = "${MediaStore.MediaColumns.MIME_TYPE} LIKE 'application/%' OR ${MediaStore.MediaColumns.MIME_TYPE} LIKE 'text/%'"
+        val out = ArrayList<DeviceItem>()
+        runCatching {
+            app.contentResolver.query(
+                base,
+                projection,
+                selection,
+                null,
+                "${MediaStore.MediaColumns.DATE_MODIFIED} DESC",
+            )?.use { cursor ->
+                val id = cursor.idx(MediaStore.MediaColumns._ID)
+                val name = cursor.idx(MediaStore.MediaColumns.DISPLAY_NAME)
+                val mime = cursor.idx(MediaStore.MediaColumns.MIME_TYPE)
+                val size = cursor.idx(MediaStore.MediaColumns.SIZE)
+                val modified = cursor.idx(MediaStore.MediaColumns.DATE_MODIFIED)
+                val bucket = cursor.idx(MediaStore.MediaColumns.BUCKET_ID)
+                val bucketName = cursor.idx(MediaStore.MediaColumns.BUCKET_DISPLAY_NAME)
+                val relIdx = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    cursor.idx(MediaStore.MediaColumns.RELATIVE_PATH)
+                } else {
+                    cursor.idx(MediaStore.MediaColumns.DATA)
+                }
+                while (cursor.moveToNext()) {
+                    val rowId = cursor.longAt(id)
+                    val rawRel = cursor.stringAt(relIdx)?.trim()?.trim('/') ?: "Documents"
+                    val rawName = cursor.stringAt(name) ?: "document"
+                    val cleanName = runCatching { URLDecoder.decode(rawName, "UTF-8") }.getOrDefault(rawName)
+                    out += DeviceItem(
+                        uri = ContentUris.withAppendedId(base, rowId),
+                        name = cleanName,
+                        bucketId = if (bucket >= 0) cursor.longAt(bucket) else NO_BUCKET,
+                        bucketName = cursor.stringAt(bucketName) ?: "Documents",
+                        mimeType = cursor.stringAt(mime),
+                        size = cursor.longAt(size),
+                        modifiedAtMillis = cursor.longAt(modified) * 1000L,
+                        durationMillis = 0L,
+                        relativePath = rawRel,
+                    )
+                }
+            }
+        }
+        out
+    }
+
     suspend fun recent(limit: Int): List<DeviceItem> = withContext(io) {
         MediaKind.entries.flatMap { query(it) }
             .distinctBy { it.uri }
@@ -114,6 +236,7 @@ class DeviceMedia(context: Context) {
             MediaStore.MediaColumns.BUCKET_ID,
             MediaStore.MediaColumns.BUCKET_DISPLAY_NAME,
             MediaStore.MediaColumns.DURATION,
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) MediaStore.MediaColumns.RELATIVE_PATH else MediaStore.MediaColumns.DATA,
         )
         val out = ArrayList<DeviceItem>()
         app.contentResolver.query(
@@ -131,13 +254,27 @@ class DeviceMedia(context: Context) {
             val bucket = cursor.idx(MediaStore.MediaColumns.BUCKET_ID)
             val bucketName = cursor.idx(MediaStore.MediaColumns.BUCKET_DISPLAY_NAME)
             val duration = cursor.idx(MediaStore.MediaColumns.DURATION)
+            val relIdx = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                cursor.idx(MediaStore.MediaColumns.RELATIVE_PATH)
+            } else {
+                cursor.idx(MediaStore.MediaColumns.DATA)
+            }
             while (cursor.moveToNext()) {
                 val rowId = cursor.longAt(id)
+                val rawPath = cursor.stringAt(relIdx)?.trim()?.trim('/')
+                val cleanRel = when {
+                    rawPath == null -> null
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q -> rawPath
+                    rawPath.contains("/storage/emulated/0/") -> rawPath.substringAfter("/storage/emulated/0/").substringBeforeLast('/', "")
+                    else -> rawPath.substringBeforeLast('/', "")
+                }
+                val rawName = cursor.stringAt(name) ?: "untitled"
+                val cleanName = runCatching { URLDecoder.decode(rawName, "UTF-8") }.getOrDefault(rawName)
                 out += DeviceItem(
                     // ContentUris, not Uri.withAppendedPath: the former knows the collection uri ends in a
                     // path segment that needs no slash handling and keeps the numeric id well-formed.
                     uri = ContentUris.withAppendedId(base, rowId),
-                    name = cursor.stringAt(name) ?: "untitled",
+                    name = cleanName,
                     bucketId = if (bucket >= 0) cursor.longAt(bucket) else NO_BUCKET,
                     bucketName = cursor.stringAt(bucketName) ?: "Files",
                     mimeType = cursor.stringAt(mime),
@@ -145,6 +282,7 @@ class DeviceMedia(context: Context) {
                     // DATE_MODIFIED is in seconds; the column of that name is a lie in some providers.
                     modifiedAtMillis = cursor.longAt(modified) * 1000L,
                     durationMillis = cursor.longAt(duration),
+                    relativePath = cleanRel,
                 )
             }
         }

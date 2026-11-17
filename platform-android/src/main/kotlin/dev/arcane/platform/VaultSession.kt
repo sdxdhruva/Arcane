@@ -63,6 +63,8 @@ class VaultSession(
 
     fun touch() = guard.touch()
 
+    fun pauseIdle(paused: Boolean) = guard.pauseIdle(paused)
+
     /**
      * Wrap a for-result launch: [beginHandoff] immediately before `launch(...)`, [endHandoff] as the first act
      * of the result callback. This is the only way the app survives its own file picker now that leaving the

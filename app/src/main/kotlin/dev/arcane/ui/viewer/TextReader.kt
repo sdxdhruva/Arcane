@@ -53,7 +53,12 @@ import kotlinx.coroutines.flow.distinctUntilChanged
  * is what makes a fast flick through a long file cost exactly the windows actually looked at.
  */
 @Composable
-fun TextReader(graph: AppGraph, record: FileRecord, monospace: Boolean) {
+fun TextReader(
+    graph: AppGraph,
+    record: FileRecord,
+    monospace: Boolean,
+    onEdit: (() -> Unit)? = null,
+) {
     val listState = rememberLazyListState()
     var lines by remember(record) { mutableStateOf<List<String>>(emptyList()) }
     var readTo by remember(record) { mutableLongStateOf(0L) }
@@ -102,6 +107,7 @@ fun TextReader(graph: AppGraph, record: FileRecord, monospace: Boolean) {
             wrap = wrap,
             onToggleMono = { mono = !mono },
             onToggleWrap = { wrap = !wrap },
+            onEdit = onEdit,
         )
         when {
             failure != null -> ViewerNote(failure ?: "")
@@ -172,6 +178,7 @@ private fun ReaderToolbar(
     wrap: Boolean,
     onToggleMono: () -> Unit,
     onToggleWrap: () -> Unit,
+    onEdit: (() -> Unit)? = null,
 ) {
     Row(
         Modifier
@@ -182,6 +189,9 @@ private fun ReaderToolbar(
     ) {
         ArcaneChip(label = if (mono) "Monospace" else "Proportional", onClick = onToggleMono, selected = mono)
         ArcaneChip(label = if (wrap) "Wrap" else "No wrap", onClick = onToggleWrap, selected = wrap)
+        if (onEdit != null) {
+            ArcaneChip(label = "Edit", onClick = onEdit, selected = true)
+        }
         Box(Modifier.weight(1f))
         Text(
             "${formatBytes(readTo)} / ${formatBytes(total)}",

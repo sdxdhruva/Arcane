@@ -23,6 +23,7 @@ import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URL
+import java.net.URLDecoder
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -54,6 +55,7 @@ data class VaultListing(
     val trail: List<FolderRecord> = emptyList(),
     val entries: List<VaultEntry> = emptyList(),
     val totalBytes: Long = 0,
+    val globalBytes: Long = 0,
 )
 
 /**
@@ -206,7 +208,7 @@ class VaultRepository(
             val index = realm().index
             val blocked = excludeSubtreesOf.flatMap { id -> index.descendantsOf(id).map { it.id } + id }.toSet()
             buildList {
-                add(null to "Top level")
+                add(null to "The Vault (Root)")
                 index.folders
                     .filterNot { it.id in blocked }
                     .sortedBy { index.pathOfFolder(it.id).lowercase() }
@@ -277,11 +279,56 @@ class VaultRepository(
         _loaded.value = false
     }
 
-    suspend fun delete(fileIds: List<ByteArray>) = working { realm ->
+    suspend fun delete(fileIds: List<ByteArray>) = deleteEntries(fileIds, emptyList())
+
+    suspend fun deleteFolder(id: String) = deleteEntries(emptyList(), listOf(id))
+
+    suspend fun deleteEntries(fileIds: List<ByteArray>, folderIds: List<String> = emptyList()) = working { realm ->
         fileIds.forEach { fileId ->
             if (realm.delete(fileId)) device.chunkCache.evict(fileId)
         }
-        _listing.value = read(realm, _listing.value.folderId)
+
+        val allDoomedFolders = LinkedHashSet<String>()
+        folderIds.forEach { folderId ->
+            if (realm.index.folder(folderId) != null) {
+                allDoomedFolders.add(folderId)
+                allDoomedFolders.addAll(realm.index.descendantsOf(folderId).map { it.id })
+            }
+        }
+
+        val filesInDoomedFolders = realm.index.files.filter { it.folderId in allDoomedFolders }
+        filesInDoomedFolders.forEach { file ->
+            if (realm.delete(file.fileId)) device.chunkCache.evict(file.fileId)
+        }
+
+        val sortedFolders = allDoomedFolders.sortedByDescending { id ->
+            var depth = 0
+            var curr = realm.index.folder(id)
+            while (curr != null) {
+                val pId = curr.parentId ?: break
+                depth++
+                curr = realm.index.folder(pId)
+            }
+            depth
+        }
+        sortedFolders.forEach { id ->
+            if (realm.index.folder(id) != null) {
+                realm.deleteFolder(id)
+            }
+        }
+
+        val currentFolderId = _listing.value.folderId
+        val targetFolderId = if (currentFolderId != null && currentFolderId in allDoomedFolders) {
+            var ancestor = realm.index.folder(currentFolderId)?.parentId
+            while (ancestor != null && ancestor in allDoomedFolders) {
+                val nextParent = realm.index.folder(ancestor)?.parentId
+                ancestor = nextParent
+            }
+            ancestor
+        } else {
+            currentFolderId
+        }
+        _listing.value = read(realm, targetFolderId)
     }
 
     suspend fun createFolder(name: String, parentId: String?) = working { realm ->
@@ -297,12 +344,6 @@ class VaultRepository(
     suspend fun moveFolder(id: String, newParentId: String?) = working { realm ->
         realm.moveFolder(id, newParentId)
         whereItWas(realm)
-    }
-
-    suspend fun deleteFolder(id: String) = working { realm ->
-        val parent = realm.index.folder(id)?.parentId
-        realm.deleteFolder(id)
-        _listing.value = read(realm, parent)
     }
 
     suspend fun renameFile(fileId: ByteArray, newName: String) = working { realm ->
@@ -325,6 +366,101 @@ class VaultRepository(
             val map = handle(fileId)
             if (map.plainSize > limitBytes) throw IOException("too large to open in RAM")
             ChunkInputStream(device.chunkCache, map).use { it.readBytes() }
+        }
+
+    /** Opens a seekable ChunkInputStream directly over the decrypted RAM chunks and returns its plain size. */
+    suspend fun openChunkStream(fileId: ByteArray): Pair<ChunkInputStream, Long> =
+        withContext(scope.coroutineContext) {
+            val map = handle(fileId)
+            Pair(ChunkInputStream(device.chunkCache, map), map.plainSize)
+        }
+
+    /** Returns the metadata record for [fileId], or null if not found. */
+    suspend fun recordOf(fileId: ByteArray): FileRecord? = withContext(scope.coroutineContext) {
+        holder.current?.realm?.file(fileId)
+    }
+
+    /** Returns the listing for [folderId] without navigating the main UI to it. */
+    suspend fun listingOf(folderId: String?): VaultListing? = withContext(scope.coroutineContext) {
+        val r = holder.current?.realm ?: return@withContext null
+        read(r, folderId?.trim()?.takeIf { it.isNotEmpty() })
+    }
+
+    /** Imports a raw input stream directly into [folderId]. */
+    suspend fun importStream(
+        source: java.io.InputStream,
+        name: String,
+        folderId: String?,
+        mimeType: String?,
+        plainSize: Long,
+    ) = working { realm ->
+        realm.import(
+            source = source,
+            name = name,
+            folderId = folderId,
+            mimeType = mimeType,
+            plainSize = plainSize,
+        )
+        whereItWas(realm)
+    }
+
+    /**
+     * Creates a new text file encrypted directly into the vault.
+     * Automatically ensures a .txt extension if omitted.
+     */
+    suspend fun createTextFile(
+        name: String,
+        content: String,
+        folderId: String?,
+    ): FileRecord? = workingResult { realm ->
+        val cleanName = sanitizeTextFileName(name)
+        val bytes = content.toByteArray(Charsets.UTF_8)
+        val record = java.io.ByteArrayInputStream(bytes).use { stream ->
+            realm.import(
+                source = stream,
+                name = cleanName,
+                folderId = folderId?.trim()?.takeIf { it.isNotEmpty() },
+                mimeType = "text/plain",
+                plainSize = bytes.size.toLong(),
+            )
+        }
+        whereItWas(realm)
+        record
+    }
+
+    /**
+     * Saves edits to an existing text file by safely replacing it in the vault.
+     * Old chunks are shredded and evicted, and the updated content is re-encrypted with AES-256-GCM.
+     */
+    suspend fun saveTextFile(
+        fileId: ByteArray,
+        name: String,
+        content: String,
+        folderId: String?,
+    ): FileRecord? = workingResult { realm ->
+        val cleanName = sanitizeTextFileName(name)
+        val bytes = content.toByteArray(Charsets.UTF_8)
+        if (realm.delete(fileId)) {
+            device.chunkCache.evict(fileId)
+        }
+        val record = java.io.ByteArrayInputStream(bytes).use { stream ->
+            realm.import(
+                source = stream,
+                name = cleanName,
+                folderId = folderId?.trim()?.takeIf { it.isNotEmpty() },
+                mimeType = "text/plain",
+                plainSize = bytes.size.toLong(),
+            )
+        }
+        whereItWas(realm)
+        record
+    }
+
+    /** Reads the entire text file into memory as a UTF-8 string (up to [maxBytes]). */
+    suspend fun readText(fileId: ByteArray, maxBytes: Long = 10L * 1024 * 1024): String =
+        withContext(scope.coroutineContext) {
+            val bytes = readAll(fileId, limitBytes = maxBytes)
+            String(bytes, Charsets.UTF_8)
         }
 
     /**
@@ -613,13 +749,28 @@ class VaultRepository(
      * index and printed in the browser, and neither place has business holding a path.
      */
     private fun nameFor(connection: HttpURLConnection, url: URL): String {
-        val offered = connection.getHeaderField("Content-Disposition")
-            ?.substringAfter("filename=", "")
-            ?.trim('"', '\'', ' ')
-            ?.takeIf { it.isNotEmpty() }
-        val fromPath = url.path.substringAfterLast('/').takeIf { it.isNotBlank() }
+        val cd = connection.getHeaderField("Content-Disposition")
+        val offered = if (!cd.isNullOrBlank()) {
+            when {
+                cd.contains("filename*=", ignoreCase = true) -> {
+                    val raw = cd.substringAfter("filename*=", "").substringAfter("''").substringBefore(';').trim('"', '\'', ' ')
+                    runCatching { URLDecoder.decode(raw, "UTF-8") }.getOrNull()?.takeIf { it.isNotBlank() }
+                }
+                cd.contains("filename=", ignoreCase = true) -> {
+                    val raw = cd.substringAfter("filename=", "").substringBefore(';').trim('"', '\'', ' ')
+                    val decoded = runCatching { URLDecoder.decode(raw, "UTF-8") }.getOrDefault(raw)
+                    decoded.takeIf { it.isNotBlank() }
+                }
+                else -> null
+            }
+        } else null
+
+        val fromPath = url.path.substringAfterLast('/').takeIf { it.isNotBlank() }?.let { raw ->
+            runCatching { URLDecoder.decode(raw, "UTF-8") }.getOrDefault(raw)
+        }
         val candidate = offered ?: fromPath ?: "download-${System.currentTimeMillis()}"
-        val clean = candidate.map { if (it.isISOControl() || it == '/' || it == '\\') '_' else it }
+        val decodedCandidate = runCatching { URLDecoder.decode(candidate, "UTF-8") }.getOrDefault(candidate)
+        val clean = decodedCandidate.map { if (it.isISOControl() || it == '/' || it == '\\') '_' else it }
             .joinToString("")
             .trim('.', ' ')
             .take(MAX_NAME_CHARS)
@@ -682,19 +833,21 @@ class VaultRepository(
     }
 
     private fun read(realm: VaultRealm, folderId: String?): VaultListing {
+        val cleanFolderId = folderId?.trim()?.takeIf { it.isNotEmpty() }
         val index = realm.index
-        val folders = index.childFolders(folderId).sortedBy { it.name.lowercase() }
-        val files = index.childFiles(folderId).sortedBy { it.name.lowercase() }
+        val folders = index.childFolders(cleanFolderId).sortedBy { it.name.lowercase() }
+        val files = index.childFiles(cleanFolderId).sortedBy { it.name.lowercase() }
         // Counts for the whole tree in one pass, rather than walking the index once per tile.
         val children = HashMap<String, Int>()
         index.folders.forEach { node -> node.parentId?.let { children[it] = (children[it] ?: 0) + 1 } }
         index.files.forEach { node -> node.folderId?.let { children[it] = (children[it] ?: 0) + 1 } }
         return VaultListing(
-            folderId = folderId,
-            trail = folderId?.let { index.ancestorsOf(it).asReversed() } ?: emptyList(),
+            folderId = cleanFolderId,
+            trail = cleanFolderId?.let { index.ancestorsOf(it).asReversed() } ?: emptyList(),
             entries = folders.map { VaultEntry.Folder(it.name, it, children[it.id] ?: 0) } +
                 files.map { VaultEntry.File(it.name, it) },
             totalBytes = files.sumOf { it.plainSize },
+            globalBytes = index.files.sumOf { it.plainSize },
         )
     }
 
@@ -715,7 +868,9 @@ class VaultRepository(
                 if (column >= 0 && !c.isNull(column)) name = c.getString(column)
             }
         }
-        return sanitize(name ?: uri.lastPathSegment ?: "file")
+        val raw = name ?: uri.lastPathSegment ?: "file"
+        val decoded = runCatching { URLDecoder.decode(raw, "UTF-8") }.getOrDefault(raw)
+        return sanitize(decoded)
     }
 
     private companion object {
@@ -744,6 +899,16 @@ class VaultRepository(
  * browser joins them with a slash, so anything that would read back as two elements gets flattened.
  */
 private fun sanitize(display: String): String {
-    val flat = display.replace('/', '-').replace('\\', '-').filter { !it.isISOControl() }.trim()
+    val decoded = runCatching { URLDecoder.decode(display, "UTF-8") }.getOrDefault(display)
+    val flat = decoded.replace('/', '-').replace('\\', '-').filter { !it.isISOControl() }.trim()
     return flat.take(180).ifBlank { "file" }
+}
+
+private fun sanitizeTextFileName(name: String): String {
+    val clean = sanitize(name.trim())
+    val dotIndex = clean.lastIndexOf('.')
+    if (dotIndex <= 0 || dotIndex == clean.length - 1) {
+        return "$clean.txt"
+    }
+    return clean
 }

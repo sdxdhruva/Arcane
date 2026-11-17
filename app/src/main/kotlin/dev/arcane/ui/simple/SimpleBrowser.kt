@@ -22,14 +22,18 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Laptop
 import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.Movie
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -50,8 +54,11 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import dev.arcane.data.AppGraph
 import dev.arcane.data.DeviceAlbum
@@ -133,6 +140,17 @@ fun SimpleBrowser(graph: AppGraph) {
         }
     }
 
+    val portalStatus by graph.devicePortal.status.collectAsStateWithLifecycle()
+    var showPortalScreen by remember { mutableStateOf(false) }
+
+    if (showPortalScreen) {
+        DevicePortalScreen(
+            graph = graph,
+            onClose = { showPortalScreen = false },
+        )
+        return
+    }
+
     Column(Modifier.fillMaxSize()) {
         Column(
             modifier = Modifier
@@ -140,7 +158,10 @@ fun SimpleBrowser(graph: AppGraph) {
                 .padding(start = ArcaneSpace.gutter - 6.dp, end = ArcaneSpace.gutter, top = ArcaneSpace.sm),
             verticalArrangement = Arrangement.spacedBy(ArcaneSpace.tight),
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 if (album != null) {
                     ArcaneAction(Icons.AutoMirrored.Rounded.ArrowBack, "All folders", { album = null }, target = 48.dp)
                 }
@@ -163,6 +184,56 @@ fun SimpleBrowser(graph: AppGraph) {
                         color = ArcanePalette.TextFaint,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
+                    )
+                }
+
+                // Phone Web Portal action
+                ArcaneAction(
+                    icon = if (portalStatus.isRunning) Icons.Rounded.Wifi else Icons.Rounded.Laptop,
+                    hint = "Phone Web Portal",
+                    onClick = { showPortalScreen = true },
+                    tint = if (portalStatus.isRunning) ArcanePalette.Mint else ArcanePalette.TextMedium,
+                    target = 48.dp,
+                )
+            }
+
+            // Active Portal Banner
+            if (portalStatus.isRunning) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(ArcaneRadius.field))
+                        .background(ArcanePalette.Mint.copy(alpha = 0.12f))
+                        .border(1.dp, ArcanePalette.Mint.copy(alpha = 0.35f), RoundedCornerShape(ArcaneRadius.field))
+                        .clickable { showPortalScreen = true }
+                        .padding(horizontal = 12.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(7.dp)
+                                .clip(CircleShape)
+                                .background(ArcanePalette.Mint),
+                        )
+                        Text(
+                            text = "Portal: ${portalStatus.url}",
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.SemiBold,
+                            ),
+                            color = ArcanePalette.Mint,
+                        )
+                    }
+                    Text(
+                        text = "Manage",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = ArcanePalette.TextHigh,
+                        fontWeight = FontWeight.Bold,
                     )
                 }
             }

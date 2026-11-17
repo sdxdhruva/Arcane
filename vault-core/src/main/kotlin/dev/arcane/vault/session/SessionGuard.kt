@@ -42,6 +42,9 @@ class SessionGuard(
     var isOpen: Boolean = false
         private set
 
+    var isIdlePaused: Boolean = false
+        private set
+
     private var pending: Cancellable? = null
 
     /**
@@ -62,12 +65,27 @@ class SessionGuard(
         isOpen = true
         handoffs = 0
         inForeground = true
-        arm(idleTimeoutMillis)
+        if (!isIdlePaused) arm(idleTimeoutMillis)
     }
 
     /** Any user interaction that means "still looking at this". */
     fun touch() {
-        if (isOpen) arm(idleTimeoutMillis)
+        if (isOpen && inForeground && !isIdlePaused) arm(idleTimeoutMillis)
+    }
+
+    /**
+     * Pause or resume the idle auto-lock timer, e.g. while the encrypted PC server is running so the user
+     * does not need to repeatedly touch the phone while browsing from their computer.
+     */
+    fun pauseIdle(paused: Boolean) {
+        if (isIdlePaused == paused) return
+        isIdlePaused = paused
+        if (!isOpen) return
+        if (paused) {
+            if (inForeground) disarm()
+        } else {
+            if (inForeground) arm(idleTimeoutMillis)
+        }
     }
 
     /**
@@ -83,7 +101,13 @@ class SessionGuard(
     fun endHandoff() {
         if (handoffs <= 0) return
         handoffs--
-        if (isOpen && handoffs == 0) arm(if (inForeground) idleTimeoutMillis else backgroundGraceMillis)
+        if (isOpen && handoffs == 0) {
+            if (inForeground) {
+                if (!isIdlePaused) arm(idleTimeoutMillis)
+            } else {
+                arm(backgroundGraceMillis)
+            }
+        }
     }
 
     fun leftForeground() {
@@ -96,7 +120,7 @@ class SessionGuard(
     fun returnedToForeground() {
         if (!isOpen) return
         inForeground = true
-        arm(idleTimeoutMillis)
+        if (!isIdlePaused) arm(idleTimeoutMillis)
     }
 
     /** The lock button, and the decoy handover. Always safe to call, even when already locked. */

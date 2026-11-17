@@ -1,6 +1,7 @@
 package dev.arcane.ui.viewer
 
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -20,16 +21,22 @@ import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Save
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -41,7 +48,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.arcane.data.AppGraph
 import dev.arcane.data.VaultEntry
 import dev.arcane.ui.components.ArcaneAction
+import dev.arcane.ui.components.ArcaneButton
+import dev.arcane.ui.components.ArcaneSheet
 import dev.arcane.ui.components.DetailRow
+import dev.arcane.ui.components.SheetAction
 import dev.arcane.ui.theme.ArcaneMotion
 import dev.arcane.ui.theme.ArcanePalette
 import dev.arcane.ui.theme.ArcaneRadius
@@ -53,6 +63,7 @@ import dev.arcane.ui.util.formatBytes
 import dev.arcane.ui.util.formatModified
 import dev.arcane.vault.format.ChunkGeometry
 import dev.arcane.vault.index.FileRecord
+import kotlinx.coroutines.launch
 
 /** What a tapped file becomes, decided from the index record and nothing else. */
 enum class ViewerKind { VIDEO, AUDIO, IMAGE, TEXT, HTML, PDF, ARCHIVE, UNKNOWN }
@@ -69,8 +80,12 @@ enum class ViewerKind { VIDEO, AUDIO, IMAGE, TEXT, HTML, PDF, ARCHIVE, UNKNOWN }
 fun VaultViewer(graph: AppGraph, record: FileRecord, onBack: () -> Unit) {
     val kind = remember(record) { kindOf(record) }
     var showInfo by remember(record) { mutableStateOf(false) }
+    var showMoreSheet by remember(record) { mutableStateOf(false) }
+    var showDeleteConfirm by remember(record) { mutableStateOf(false) }
+    var isEditing by remember(record.fileId) { mutableStateOf(record.plainSize == 0L) }
     val listing by graph.repository.listing.collectAsStateWithLifecycle()
     val queue by graph.viewQueue.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
 
     // Where this file sits among the others that open the same way. A search-filtered folder hands over only
     // the files on screen, so a swipe never lands on something the person had just filtered out; the listing
@@ -104,9 +119,41 @@ fun VaultViewer(graph: AppGraph, record: FileRecord, onBack: () -> Unit) {
         exportTo.launch(record.name)
     }
 
+    BackHandler {
+        when {
+            showDeleteConfirm -> showDeleteConfirm = false
+            showMoreSheet -> showMoreSheet = false
+            showInfo -> showInfo = false
+            kind == ViewerKind.TEXT && isEditing && record.plainSize > 0L -> isEditing = false
+            else -> onBack()
+        }
+    }
+
     // A video plays edge to edge with its own strip of controls, because a header row above a film is a
     // header row inside it. Everything else keeps the header, which is where its export button lives.
     CompositionLocalProvider(LocalPager provides pager) {
+        if (kind == ViewerKind.TEXT && isEditing) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .arcaneBackdrop()
+                    .systemBarsPadding(),
+            ) {
+                TextEditor(
+                    graph = graph,
+                    record = record,
+                    onBack = {
+                        if (record.plainSize == 0L) onBack() else isEditing = false
+                    },
+                    onRecordUpdated = { updated ->
+                        graph.view(updated)
+                    },
+                    onSwitchToReader = if (record.plainSize > 0L) { { isEditing = false } } else null,
+                )
+            }
+            return@CompositionLocalProvider
+        }
+
         if (kind == ViewerKind.VIDEO) {
             Box(Modifier.fillMaxSize().arcaneBackdrop()) {
                 ViewerBody(
@@ -115,7 +162,8 @@ fun VaultViewer(graph: AppGraph, record: FileRecord, onBack: () -> Unit) {
                     kind = kind,
                     onInfo = { showInfo = !showInfo },
                     onExport = exportCurrent,
-                    chromeHidden = showInfo,
+                    chromeHidden = showInfo || showMoreSheet || showDeleteConfirm,
+                    onMore = { showMoreSheet = true },
                 )
                 AnimatedVisibility(
                     visible = showInfo,
@@ -136,42 +184,171 @@ fun VaultViewer(graph: AppGraph, record: FileRecord, onBack: () -> Unit) {
                     }
                 }
             }
-            return@CompositionLocalProvider
-        }
+        } else {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .arcaneBackdrop()
+                    .systemBarsPadding(),
+            ) {
+                Column(Modifier.fillMaxSize()) {
+                    ViewerHeader(
+                        title = record.name,
+                        subtitle = subtitleFor(kind, record),
+                        pager = pager,
+                        onBack = onBack,
+                        onInfo = { showInfo = !showInfo },
+                        onExport = exportCurrent,
+                        onEdit = if (kind == ViewerKind.TEXT && record.plainSize <= MAX_EDITABLE_BYTES) {
+                            { isEditing = true }
+                        } else null,
+                        onMore = { showMoreSheet = true },
+                    )
+                    Box(Modifier.weight(1f)) {
+                        ViewerBody(
+                            graph = graph,
+                            record = record,
+                            kind = kind,
+                            onInfo = { showInfo = !showInfo },
+                            onExport = exportCurrent,
+                            chromeHidden = showInfo || showMoreSheet || showDeleteConfirm,
+                            onMore = { showMoreSheet = true },
+                            onEdit = if (kind == ViewerKind.TEXT && record.plainSize <= MAX_EDITABLE_BYTES) {
+                                { isEditing = true }
+                            } else null,
+                        )
+                    }
+                }
 
-        Box(
-            Modifier
-                .fillMaxSize()
-                .arcaneBackdrop()
-                .systemBarsPadding(),
-        ) {
-            Column(Modifier.fillMaxSize()) {
-                ViewerHeader(
-                    title = record.name,
-                    subtitle = subtitleFor(kind, record),
-                    pager = pager,
-                    onBack = onBack,
-                    onInfo = { showInfo = !showInfo },
-                    onExport = exportCurrent,
-                )
-                Box(Modifier.weight(1f)) {
-                    ViewerBody(graph = graph, record = record, kind = kind)
+                AnimatedVisibility(
+                    visible = showInfo,
+                    enter = fadeIn(tween(ArcaneMotion.quick)),
+                    exit = fadeOut(tween(ArcaneMotion.quick)),
+                    modifier = Modifier.fillMaxSize(),
+                ) {
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .background(ArcanePalette.Scrim)
+                            .pointerInput(Unit) { detectTapGestures { showInfo = false } }
+                    ) {
+                        InfoCard(record, modifier = Modifier.align(Alignment.BottomCenter))
+                    }
                 }
             }
+        }
 
-            AnimatedVisibility(
-                visible = showInfo,
-                enter = fadeIn(tween(ArcaneMotion.quick)),
-                exit = fadeOut(tween(ArcaneMotion.quick)),
-                modifier = Modifier.fillMaxSize(),
+        // 3-dot options sheet
+        ArcaneSheet(
+            visible = showMoreSheet,
+            onDismiss = { showMoreSheet = false },
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = ArcaneSpace.md)
+                    .padding(bottom = ArcaneSpace.xs),
             ) {
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .background(ArcanePalette.Scrim)
-                        .pointerInput(Unit) { detectTapGestures { showInfo = false } }
+                Text(
+                    text = record.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = ArcanePalette.TextHigh,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = "${formatBytes(record.plainSize)} · ${labelFor(kind)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = ArcanePalette.TextMedium,
+                )
+            }
+
+            SheetAction(
+                label = "Details",
+                subtitle = "View encryption and file metadata",
+                icon = Icons.Rounded.Info,
+                onClick = {
+                    showMoreSheet = false
+                    showInfo = true
+                },
+            )
+            SheetAction(
+                label = "Export a copy",
+                subtitle = "Save an unencrypted copy outside the vault",
+                icon = Icons.Rounded.Save,
+                onClick = {
+                    showMoreSheet = false
+                    exportCurrent()
+                },
+            )
+            SheetAction(
+                label = "Delete ${labelFor(kind).lowercase()}",
+                subtitle = "Permanently remove from encrypted vault",
+                icon = Icons.Rounded.DeleteOutline,
+                destructive = true,
+                onClick = {
+                    showMoreSheet = false
+                    showDeleteConfirm = true
+                },
+            )
+        }
+
+        // Delete confirmation sheet
+        ArcaneSheet(
+            visible = showDeleteConfirm,
+            onDismiss = { showDeleteConfirm = false },
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = ArcaneSpace.md)
+                    .padding(bottom = ArcaneSpace.md),
+                verticalArrangement = Arrangement.spacedBy(ArcaneSpace.sm),
+            ) {
+                Text(
+                    text = "Delete \"${record.name}\"?",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.error,
+                )
+                Text(
+                    text = "This ${labelFor(kind).lowercase()} will be shredded and permanently deleted from the vault. This cannot be undone.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ArcanePalette.TextMedium,
+                )
+                Row(
+                    modifier = Modifier.padding(top = ArcaneSpace.xs),
+                    horizontalArrangement = Arrangement.spacedBy(ArcaneSpace.xs),
                 ) {
-                    InfoCard(record, modifier = Modifier.align(Alignment.BottomCenter))
+                    ArcaneButton(
+                        label = "Cancel",
+                        filled = false,
+                        onClick = { showDeleteConfirm = false },
+                        modifier = Modifier.weight(1f),
+                    )
+                    ArcaneButton(
+                        label = "Delete",
+                        icon = Icons.Rounded.Delete,
+                        onClick = {
+                            showDeleteConfirm = false
+                            scope.launch {
+                                try {
+                                    val fileIdToDelete = record.fileId
+                                    val remaining = siblings.filterNot { it.fileId.contentEquals(fileIdToDelete) }
+                                    val nextSibling = if (index < remaining.size) remaining[index] else remaining.lastOrNull()
+
+                                    graph.repository.delete(listOf(fileIdToDelete))
+                                    graph.removeFilesFromQueue(listOf(fileIdToDelete))
+                                    if (nextSibling != null) {
+                                        graph.view(nextSibling, remaining)
+                                    } else {
+                                        onBack()
+                                    }
+                                } catch (_: Throwable) {
+                                }
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                    )
                 }
             }
         }
@@ -222,6 +399,8 @@ private fun ViewerHeader(
     onBack: () -> Unit,
     onInfo: () -> Unit,
     onExport: () -> Unit,
+    onEdit: (() -> Unit)? = null,
+    onMore: (() -> Unit)? = null,
 ) {
     Row(
         modifier = Modifier
@@ -270,8 +449,20 @@ private fun ViewerHeader(
                 enabled = pager.hasNext,
             )
         }
+        if (onEdit != null) {
+            ArcaneAction(
+                icon = Icons.Rounded.Edit,
+                hint = "Edit document",
+                onClick = onEdit,
+                target = 48.dp,
+                tint = MaterialTheme.colorScheme.primary,
+            )
+        }
         ArcaneAction(Icons.Rounded.Info, "Details", onInfo, target = 48.dp)
         ArcaneAction(Icons.Rounded.Save, "Export a copy", onExport, target = 48.dp)
+        if (onMore != null) {
+            ArcaneAction(Icons.Rounded.MoreVert, "More options", onMore, target = 48.dp)
+        }
     }
 }
 
@@ -283,6 +474,8 @@ private fun ViewerBody(
     onInfo: () -> Unit = {},
     onExport: () -> Unit = {},
     chromeHidden: Boolean = false,
+    onEdit: (() -> Unit)? = null,
+    onMore: (() -> Unit)? = null,
 ) {
     when (kind) {
         ViewerKind.VIDEO, ViewerKind.AUDIO -> MediaViewer(
@@ -292,10 +485,11 @@ private fun ViewerBody(
             onInfo = onInfo,
             onExport = onExport,
             chromeHidden = chromeHidden,
+            onMore = onMore,
         )
 
         ViewerKind.IMAGE -> ImageViewer(graph = graph, record = record)
-        ViewerKind.TEXT -> TextReader(graph = graph, record = record, monospace = false)
+        ViewerKind.TEXT -> TextReader(graph = graph, record = record, monospace = false, onEdit = onEdit)
         ViewerKind.HTML -> HtmlViewer(graph = graph, record = record)
         ViewerKind.PDF -> PdfViewer(graph = graph, record = record)
         ViewerKind.ARCHIVE -> ArchiveViewer(graph = graph, record = record)
@@ -344,3 +538,5 @@ private val TEXT_EXT = setOf(
     "kt", "kts", "java", "py", "js", "ts", "go", "rs", "c", "h", "cpp", "hpp", "sh", "sql", "srt", "vtt",
     "ass", "ssa", "gradle", "properties", "env",
 )
+
+private const val MAX_EDITABLE_BYTES = 5L * 1024 * 1024

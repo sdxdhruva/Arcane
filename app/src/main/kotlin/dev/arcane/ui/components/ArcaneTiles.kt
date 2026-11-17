@@ -103,6 +103,8 @@ fun FileTile(
     picked: Boolean = false,
     thumbnail: Any? = null,
     compact: Boolean = false,
+    activePreview: Boolean = false,
+    previewContent: (@Composable () -> Unit)? = null,
 ) {
     val interactions = remember { MutableInteractionSource() }
     val pressed by interactions.collectIsPressedAsState()
@@ -150,19 +152,44 @@ fun FileTile(
             }
             if (thumbnail != null) {
                 Cover(thumbnail, Modifier.fillMaxSize())
-                // A floor for the badge, so a bright photo cannot swallow the extension.
+            }
+
+            // Live in-frame video preview inside this tile's own boundary
+            if (video && activePreview && previewContent != null) {
+                previewContent()
+            }
+
+            // A floor for the badge, so a bright photo/video cannot swallow the extension
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(if (compact) 38.dp else 58.dp)
+                    .align(Alignment.BottomCenter)
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(Color.Transparent, ArcanePalette.Ink0.copy(alpha = 0.65f))
+                        )
+                    )
+            )
+
+            if (video && (!activePreview || previewContent == null)) {
                 Box(
                     Modifier
-                        .fillMaxWidth()
-                        .height(58.dp)
-                        .align(Alignment.BottomCenter)
-                        .background(
-                            Brush.verticalGradient(
-                                listOf(Color.Transparent, ArcanePalette.Ink0.copy(alpha = 0.62f))
-                            )
-                        )
-                )
-            } else if (!video) {
+                        .align(Alignment.Center)
+                        .size(if (compact) 32.dp else 44.dp)
+                        .clip(CircleShape)
+                        .background(ArcanePalette.Ink0.copy(alpha = 0.52f))
+                        .border(1.dp, Color.White.copy(alpha = 0.25f), CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Rounded.PlayArrow,
+                        contentDescription = null,
+                        tint = Color.White.copy(alpha = 0.95f),
+                        modifier = Modifier.size(if (compact) 16.dp else 22.dp),
+                    )
+                }
+            } else if (!video && thumbnail == null) {
                 Icon(
                     glyphFor(name, mimeType),
                     contentDescription = null,
@@ -173,28 +200,9 @@ fun FileTile(
                 )
             }
 
-            if (video) {
-                Box(
-                    Modifier
-                        .align(Alignment.Center)
-                        .size(if (compact) 36.dp else 46.dp)
-                        .clip(CircleShape)
-                        .background(ArcanePalette.Ink0.copy(alpha = 0.46f))
-                        .border(1.dp, Color.White.copy(alpha = 0.22f), CircleShape),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        Icons.Rounded.PlayArrow,
-                        contentDescription = null,
-                        tint = Color.White.copy(alpha = 0.94f),
-                        modifier = Modifier.size(if (compact) 18.dp else 24.dp),
-                    )
-                }
-            }
-
             if (ext.isNotEmpty()) {
                 Text(
-                    ext.uppercase(),
+                    if (video && activePreview && previewContent != null) "PLAYING" else ext.uppercase(),
                     style = MaterialTheme.typography.labelSmall,
                     color = Color.White.copy(alpha = 0.88f),
                     maxLines = 1,
@@ -339,6 +347,8 @@ fun EntryRow(
     trailing: String? = null,
     thumbnail: Any? = null,
     tint: Color = ArcanePalette.tintFor(null, name),
+    activePreview: Boolean = false,
+    previewContent: (@Composable () -> Unit)? = null,
 ) {
     val interactions = remember { MutableInteractionSource() }
     val pressed by interactions.collectIsPressedAsState()
@@ -380,6 +390,9 @@ fun EntryRow(
                     modifier = Modifier.size(21.dp),
                 )
             }
+            if (activePreview && previewContent != null) {
+                previewContent()
+            }
         }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
@@ -413,7 +426,7 @@ fun EntryRow(
  * hands over an already-decrypted frame, so the fade is the only placeholder it gets.
  */
 @Composable
-private fun Cover(model: Any, modifier: Modifier) {
+internal fun Cover(model: Any, modifier: Modifier) {
     if (model is Bitmap) {
         val alpha = remember(model) { Animatable(0f) }
         LaunchedEffect(model) { alpha.animateTo(1f, tween(ArcaneMotion.quick)) }
@@ -435,7 +448,7 @@ private fun Cover(model: Any, modifier: Modifier) {
 
 /** The folder silhouette: a dark tabbed back with a lighter front flap and one edge of reflected light. */
 @Composable
-private fun FolderCover(modifier: Modifier = Modifier) {
+internal fun FolderCover(modifier: Modifier = Modifier) {
     Canvas(modifier) {
         val radius = 9.dp.toPx()
         val width = size.width

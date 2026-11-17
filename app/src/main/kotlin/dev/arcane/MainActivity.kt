@@ -1,5 +1,9 @@
 package dev.arcane
 
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Color
 import android.os.Bundle
 import android.view.WindowManager
@@ -9,6 +13,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -29,6 +34,22 @@ class MainActivity : ComponentActivity() {
 
     private val secure = WindowManager.LayoutParams.FLAG_SECURE
 
+    /**
+     * Power Button Emergency Kill Switch:
+     * When the user presses the physical power button (1 tap), the display turns off and Android
+     * broadcasts ACTION_SCREEN_OFF. This receiver catches it instantly (0 ms), evaporates all RAM
+     * encryption keys, stops media/portal services, and evicts the app from Android's Recents stack.
+     */
+    private val powerKillSwitchReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == Intent.ACTION_SCREEN_OFF) {
+                val graph = (application as? ArcaneApplication)?.graph
+                graph?.lockNow()
+                finishAndRemoveTask()
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         // The app is dark whatever the system theme says, so the bar icons are decided here rather than left
         // to `auto`, which would hand a light-mode phone dark icons on a near-black backdrop.
@@ -48,6 +69,13 @@ class MainActivity : ComponentActivity() {
             }
         }
         hideSystemBars()
+
+        ContextCompat.registerReceiver(
+            this,
+            powerKillSwitchReceiver,
+            IntentFilter(Intent.ACTION_SCREEN_OFF),
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
     }
 
     /**
@@ -80,6 +108,25 @@ class MainActivity : ComponentActivity() {
     override fun onUserInteraction() {
         super.onUserInteraction()
         (application as ArcaneApplication).graph.session.touch()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        (application as? ArcaneApplication)?.graph?.pauseAllPlayers()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        val graph = (application as? ArcaneApplication)?.graph
+        graph?.stopAllPlayers()
+        graph?.portal?.stop()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        try {
+            unregisterReceiver(powerKillSwitchReceiver)
+        } catch (_: Exception) {}
     }
 
     companion object {

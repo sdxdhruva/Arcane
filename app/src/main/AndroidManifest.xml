@@ -30,6 +30,12 @@
          notifications. -->
     <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
 
+    <!-- Phone Web Portal background persistence: keeps the local Wi-Fi web server alive when screen is locked or app is in background -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
     <!-- Package visibility, not an intent filter: "open with…" on a phone file asks the package manager
          which viewers exist, and Android 11+ answers "none" for an app that has not declared what it looks
          for. This only makes installed viewers visible to that lookup; it adds no capability. -->
@@ -66,5 +72,10 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".portal.DevicePortalService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
     </application>
 </manifest>

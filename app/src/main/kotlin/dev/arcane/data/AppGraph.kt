@@ -7,6 +7,9 @@ import dev.arcane.media.ArcanePlaybackSources
 import dev.arcane.platform.RingerKeeper
 import dev.arcane.platform.VaultDevice
 import dev.arcane.platform.VaultSession
+import dev.arcane.data.backup.VaultBackupManager
+import dev.arcane.portal.AirVaultServer
+import dev.arcane.portal.DevicePortalServer
 import dev.arcane.vault.index.FileRecord
 import java.util.concurrent.Executors
 import kotlinx.coroutines.CoroutineScope
@@ -47,6 +50,17 @@ class AppGraph private constructor(context: Context) {
 
     /** The phone's ringer, borrowed for the length of an open realm. See [RingerKeeper]. */
     val ringer: RingerKeeper = RingerKeeper(app)
+
+    val backup: VaultBackupManager = VaultBackupManager(app, device)
+
+    val portal: AirVaultServer = AirVaultServer(this)
+
+    /**
+     * Default unencrypted Phone Web Portal:
+     * Serves normal phone media (photos, videos, audio, downloads) over local Wi-Fi.
+     * Persists across backgrounding and screen lock, completely isolated from vault encryption keys.
+     */
+    val devicePortal: DevicePortalServer = DevicePortalServer(app, media)
 
     /**
      * The ringer follows the realm rather than a screen, because the moment worth silencing is the moment there
@@ -138,6 +152,12 @@ class AppGraph private constructor(context: Context) {
         }
     }
 
+    fun removeFilesFromQueue(fileIds: List<ByteArray>) {
+        val current = _viewQueue.value ?: return
+        val updated = current.filterNot { rec -> fileIds.any { it.contentEquals(rec.fileId) } }
+        _viewQueue.value = updated
+    }
+
     /** The single factory the one player uses: vault content decrypts, everything else behaves normally. */
     val playbackSources: DataSource.Factory = ArcanePlaybackSources(
         app,
@@ -147,9 +167,39 @@ class AppGraph private constructor(context: Context) {
     /** Covers for the grid: decrypted on demand, held in RAM only, emptied by [lockNow]. */
     val thumbnails: VaultThumbnails = VaultThumbnails(repository, playbackSources)
 
+    private val activePlayers = java.util.Collections.newSetFromMap(java.util.WeakHashMap<androidx.media3.common.Player, Boolean>())
+
+    fun registerPlayer(player: androidx.media3.common.Player) {
+        synchronized(activePlayers) { activePlayers.add(player) }
+    }
+
+    fun unregisterPlayer(player: androidx.media3.common.Player) {
+        synchronized(activePlayers) { activePlayers.remove(player) }
+    }
+
+    fun pauseAllPlayers() {
+        val players = synchronized(activePlayers) { activePlayers.toList() }
+        players.forEach { player ->
+            runCatching {
+                if (player.isPlaying) player.pause()
+            }
+        }
+    }
+
+    fun stopAllPlayers() {
+        val players = synchronized(activePlayers) { activePlayers.toList() }
+        players.forEach { player ->
+            runCatching {
+                player.stop()
+            }
+        }
+    }
+
     /** Stops the work, then the keys, then the plaintext. Order matters: a wipe mid-write corrupts nothing
      * but a write after a wipe leaves blobs no later unlock can name. */
     fun lockNow() {
+        portal.stop()
+        stopAllPlayers()
         // First, because a viewer that unmounts after the key is gone would spend its last frame reading a
         // locked realm; unmounting is the polite half of wiping.
         _viewing.value = null

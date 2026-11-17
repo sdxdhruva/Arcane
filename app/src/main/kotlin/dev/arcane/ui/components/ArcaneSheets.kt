@@ -34,6 +34,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -246,6 +247,12 @@ fun FolderChoiceList(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(ArcaneSpace.sm),
             ) {
+                Icon(
+                    imageVector = Icons.Rounded.FolderOpen,
+                    contentDescription = null,
+                    tint = if (here) ArcanePalette.TextFaint else ArcanePalette.Cyan,
+                    modifier = Modifier.size(22.dp),
+                )
                 Text(
                     path,
                     style = MaterialTheme.typography.bodyMedium,
@@ -256,7 +263,7 @@ fun FolderChoiceList(
                 )
                 if (here) {
                     Text(
-                        "You are here",
+                        "(Current location)",
                         style = MaterialTheme.typography.labelMedium,
                         color = ArcanePalette.TextFaint,
                     )

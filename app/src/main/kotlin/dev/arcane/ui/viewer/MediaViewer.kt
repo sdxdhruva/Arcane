@@ -45,6 +45,7 @@ import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.LockOpen
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Replay10
@@ -188,6 +189,7 @@ fun MediaViewer(
     onInfo: () -> Unit,
     onExport: () -> Unit,
     chromeHidden: Boolean,
+    onMore: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val pager = LocalPager.current
@@ -229,8 +231,20 @@ fun MediaViewer(
             }
     }
 
-    DisposableEffect(player) {
-        onDispose { player.release() }
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(player, lifecycleOwner) {
+        graph.registerPlayer(player)
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_PAUSE || event == androidx.lifecycle.Lifecycle.Event.ON_STOP) {
+                if (player.isPlaying) player.pause()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            graph.unregisterPlayer(player)
+            player.release()
+        }
     }
     // A viewer that dims the screen out from under itself is a viewer that locks the vault through the idle
     // timeout, so the screen stays awake for as long as the frame is moving.
@@ -309,7 +323,9 @@ fun MediaViewer(
     LaunchedEffect(player, isPlaying) {
         if (!isPlaying) return@LaunchedEffect
         while (true) {
-            graph.session.touch()
+            if (player.isPlaying && graph.session.isOpen) {
+                graph.session.touch()
+            }
             delay(KEEPALIVE_MS)
         }
     }
@@ -537,7 +553,13 @@ fun MediaViewer(
             exit = fadeOut(tween(ArcaneMotion.quick)),
             modifier = Modifier.align(Alignment.TopCenter).systemBarsPadding(),
         ) {
-            PlayerTitle(record = record, onBack = { pager.onBack() }, onInfo = onInfo, onExport = onExport)
+            PlayerTitle(
+                record = record,
+                onBack = { pager.onBack() },
+                onInfo = onInfo,
+                onExport = onExport,
+                onMore = onMore,
+            )
         }
 
         AnimatedVisibility(
@@ -745,6 +767,7 @@ private fun PlayerTitle(
     onBack: () -> Unit,
     onInfo: () -> Unit,
     onExport: () -> Unit,
+    onMore: (() -> Unit)? = null,
 ) {
     val pager = LocalPager.current
     Row(
@@ -774,6 +797,9 @@ private fun PlayerTitle(
         }
         ArcaneAction(Icons.Rounded.Info, "Details", onInfo, target = 48.dp)
         ArcaneAction(Icons.Rounded.Save, "Export a copy", onExport, target = 48.dp)
+        if (onMore != null) {
+            ArcaneAction(Icons.Rounded.MoreVert, "More options", onMore, target = 48.dp)
+        }
     }
 }
 

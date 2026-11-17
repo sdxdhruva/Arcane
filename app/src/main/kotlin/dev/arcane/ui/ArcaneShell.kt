@@ -1,5 +1,8 @@
 package dev.arcane.ui
 
+import android.app.Activity
+import android.os.SystemClock
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.tween
@@ -33,12 +36,14 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -87,6 +92,26 @@ fun ArcaneShell(graph: AppGraph) {
     // covers all three, and because the bars are hidden rather than merely transparent it is zero until one
     // of them is actually needed — so nothing jumps when a swipe brings them back.
     val rise = if (ArcaneMotion.durationScale() == 0f) 0 else with(LocalDensity.current) { 24.dp.toPx().toInt() }
+
+    val context = LocalContext.current
+    var lastBackPressMillis by remember { mutableLongStateOf(0L) }
+    var backToast by remember { mutableStateOf<Toast?>(null) }
+
+    // Prevent accidental single swipe or misclick from exiting or minimizing the app at root
+    BackHandler(enabled = viewing == null && entry != Entry.PLAIN) {
+        val now = SystemClock.uptimeMillis()
+        if (now - lastBackPressMillis < 2000L) {
+            backToast?.cancel()
+            val activity = context as? Activity
+            activity?.finish()
+        } else {
+            lastBackPressMillis = now
+            backToast?.cancel()
+            val toast = Toast.makeText(context, "Press back again to exit", Toast.LENGTH_SHORT)
+            backToast = toast
+            toast.show()
+        }
+    }
 
     // The viewer closes before anything else does, because a back gesture that silently leaves a video on
     // screen while the phone goes back to its door is the one thing nobody meant to happen.
